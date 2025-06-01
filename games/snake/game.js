@@ -68,8 +68,6 @@ document.addEventListener('keydown', function(event) {
     if (preventKeys.includes(event.code)) {
         event.preventDefault();
     }
-    Game.keys[event.code] = true;
-    updateInputs();
     let newDir = null;
     if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
         newDir = 3;
