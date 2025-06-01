@@ -64,6 +64,12 @@ async function init() {
 }
 
 document.addEventListener('keydown', function(event) {
+    let preventKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'];
+    if (preventKeys.includes(event.code)) {
+        event.preventDefault();
+    }
+    Game.keys[event.code] = true;
+    updateInputs();
     let newDir = null;
     if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
         newDir = 3;
