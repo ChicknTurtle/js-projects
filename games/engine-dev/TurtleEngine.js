@@ -8,8 +8,8 @@ var te = {
      * @type {number} */
     _prevTimestamp: 0,
     /** Used to calculate mouse velocity each frame.
-     * @type {tlib.Vec2} */
-    _prevMousePos: new tlib.Vec2(0,0),
+     * @type {Vec2} */
+    _prevMousePos: new Vec2(0,0),
     /** Keeps track of total number of created game objects, used to assign ids.
      * @type {number} */
     _createdObjects: 0,
@@ -74,10 +74,15 @@ var te = {
             }
             return inputArray;
         }
+        return [];
     },
     _handleKeydown: function(event) {
         if (this.ignoreWhileCtrl && this.keys.ControlLeft || this.keys.ControlRight || this.keys.MetaLeft || this.keys.MetaRight) {
             return;
+        }
+        // prevent scrolling
+        if (this.preventScroll && (event.code === 'Space' || event.code === 'ArrowUp' || event.code === 'ArrowDown')) {
+            event.preventDefault();
         }
         let alreadyPressed = this.keys[event.code]
         let relatedInputs = this._updateInputKey(event.code, true);
@@ -92,10 +97,26 @@ var te = {
     },
     _handleMousemove: function(event) {
         this.mouseHere = true;
-        this.mousePos = new tlib.Vec2(event.clientX, event.clientY);
+        this.mousePos = new Vec2(event.clientX, event.clientY);
+        this.mouseMoved(new Vec2(event.clientX, event.clientY));
     },
     _handleMouseleave: function(event) {
         this.mouseHere = false;
+        //this.mouseDown = false;
+    },
+    _handleMousedown: function(event) {
+        this.mouseDown = true;
+        this.mouseClicked(new Vec2(event.clientX, event.clientY));
+    },
+    _handleMouseup: function(event) {
+        this.mouseDown = false;
+        this.mouseReleased(new Vec2(event.clientX, event.clientY));
+    },
+    _handleWheel: function(event) {
+        if (this.preventScroll) {
+            event.preventDefault();
+        }
+        this.mouseScrolled(new Vec2(event.clientX, event.clientY), new Vec2(event.deltaX, event.deltaY));
     },
     _handleBlur: function(event) {
         this._killInputs();
@@ -120,6 +141,12 @@ var te = {
         window.addEventListener('mousemove', this._handleMousemove);
         this._handleMouseleave = this._handleMouseleave.bind(this);
         window.addEventListener('mouseout', this._handleMouseleave);
+        this._handleMousedown = this._handleMousedown.bind(this);
+        window.addEventListener('mousedown', this._handleMousedown);
+        this._handleMouseup = this._handleMouseup.bind(this);
+        window.addEventListener('mouseup', this._handleMouseup);
+        this._handleWheel = this._handleWheel.bind(this);
+        window.addEventListener('wheel', this._handleWheel, { passive:false });
         this._handleBlur = this._handleBlur.bind(this);
         window.addEventListener('blur', this._handleBlur);
     },
@@ -162,14 +189,18 @@ var te = {
             ctx.save();
             let centerX = this.canvas.width/2;
             let centerY = this.canvas.height/2;
-            ctx.translate(centerX-this.scroll.x,centerY-this.scroll.y);
+            const screenX = -this.scroll.x * this.zoom * this.dpr;
+            const screenY = -this.scroll.y * this.zoom * this.dpr;
+            const drawX = screenX / (this.zoom * this.dpr);
+            const drawY = screenY / (this.zoom * this.dpr);
+            ctx.translate(drawX,drawY);
             ctx.scale(this.zoom,this.zoom)
             this.objects.sort((a, b) => a.drawPriority - b.drawPriority);
             this.objects.forEach(object => {
                 ctx.save();
                 if (object.drawWithoutTransform === true) {
                     ctx.scale(1/this.zoom,1/this.zoom);
-                    ctx.translate(-centerX+this.scroll.x,-centerY+this.scroll.y);
+                    ctx.translate(-drawX,-drawY);
                 }
                 object.draw();
                 ctx.restore();
@@ -243,8 +274,8 @@ var te = {
      * @type {number} */
     zoom: 1,
     /** Camera scroll vector
-     * @type {tlib.Vec2} */
-    scroll: new tlib.Vec2(),
+     * @type {Vec2} */
+    scroll: new Vec2(),
     /** The canvas context, used to draw onto the canvas.
      * @type {CanvasRenderingContext2D} */
     ctx: null,
@@ -266,6 +297,9 @@ var te = {
      * ControlLeft, ControlRight, MetaLeft, MetaRight
      * @type {boolean} */
     ignoreWhileCtrl: true,
+    /** If true, prevents scrolling via mouse wheel, arrow keys, etc.
+     * @type {boolean} */
+    preventScroll: true,
     /** Keeps track of which keys are currently being pressed.
      * @type {Object.<string, boolean>} */
     keys: {},
@@ -282,14 +316,17 @@ var te = {
     keybinds: {},
     /** Keeps track of mouse position on the screen.  
      * Use `te.getGamePos()` to convert to game pos.
-     * @type {tlib.Vec2} */
-    mousePos: new tlib.Vec2(),
+     * @type {Vec2} */
+    mousePos: new Vec2(),
     /** Keeps track of the mouse's current velocity.
-     * @type {tlib.Vec2} */
-    mouseVel: new tlib.Vec2(),
+     * @type {Vec2} */
+    mouseVel: new Vec2(),
     /** Keeps track of whether mouse is over the window.
      * @type {boolean} */
     mouseHere: false,
+    /** Keeps track of whether mouse is dragging.
+     * @type {boolean} */
+    mouseDown: false,
     /** Whether debug hitboxes are displayed.
      * @type {boolean} */
     showHitboxes: false,
@@ -324,62 +361,103 @@ var te = {
      * @param {string} key Code of the key that was released
      * @param {string[]} relatedInputs List of related inputs, if any */
     keyReleased: function(key, relatedInputs){},
+    /** Overwrite this function and use it as a mousemove event.  
+     * Automatically called when the mouse is moved.
+     * @param {Vec2} pos Current mouse location on screen */
+    mouseMoved: function(pos){},
+    /** Overwrite this function and use it as a mousedown event.  
+     * Automatically called when the mouse is clicked.
+     * @param {Vec2} pos Current mouse location on screen */
+    mouseClicked: function(pos){},
+    /** Overwrite this function and use it as a mouseup event.  
+     * Automatically called when the mouse is released.
+     * @param {Vec2} pos Current mouse location on screen */
+    mouseReleased: function(pos){},
+    /** Overwrite this function and use it as a wheel event.  
+     * Automatically called when the screen is scrolled.
+     * @param {Vec2} pos Current mouse location on screen
+     * @param {Vec2} delta Delta of scroll amount, you'll usually want delta.y */
+    mouseScrolled: function(pos,delta){},
     /** Get the screen pos from a game pos
-     * @param {tlib.Vec2} pos Input pos */
+     * @param {Vec2} pos Input pos */
     getScreenPos: function(pos) {
-        let centerX = this.canvas.width/2;
-        let centerY = this.canvas.height/2;
-        return pos.clone().multiply(this.zoom).add(new tlib.Vec2(centerX-this.scroll.x,centerY-this.scroll.y));
+        return pos.clone().multiply(this.zoom).add(new Vec2(-this.scroll.x,-this.scroll.y));
     },
     /** Get the game pos from a screen pos
-     * @param {tlib.Vec2} pos Input pos */
+     * @param {Vec2} pos Input pos */
     getGamePos: function(pos) {
-        let centerX = this.canvas.width/2;
-        let centerY = this.canvas.height/2;
-        return pos.clone().subtract(new tlib.Vec2(centerX-this.scroll.x,centerY-this.scroll.y)).divide(this.zoom);
+        return pos.clone().subtract(new Vec2(-this.scroll.x,-this.scroll.y)).divide(this.zoom);
     },
 
     /** The base game object class.  
-     * Every game object has a pos, size, tickPriority, drawPriority, and id.  
+     * Every game object has a pos, size, radius, tickPriority, drawPriority, and id.  
      * You can subclass game object classes to create new types of game objects. Just make sure to always call the parent class's contructor from the new class's.  
      * You can also overwrite their `tick()` and `draw()` functions, which are called automatically based on `tickPriority` and `drawPriority`.  
-     * You can enable the `drawWithoutTransform` property for it to be drawn without zoom or translation.
-     * @param {tlib.Vec2} pos Starting pos of the object
-     * @param {tlib.Vec2} size Size vector of the object's hitbox in pixels
+     * You can enable the `drawWithoutTransform` property for it to be drawn without zoom or translation.  
+     * You can enable the `circularHitbox` property to make the hitbox act as a circle, with center at center of the object and diameter as the smallest of the object's width or height.
+     * @param {Vec2} pos Starting pos of the object
+     * @param {Vec2} size Size vector of the object's hitbox in pixels
      * @param {number} tickPriority Changes the order objects will be ticked in (lowest to highest)
      * @param {number} drawPriority Changes the order objects will be drawn in (lowest to highest) */
     GameObject: class {
-        constructor(pos=new tlib.Vec2(),size=new tlib.Vec2(),tickPriority=0,drawPriority=0) {
+        constructor(pos=new Vec2(),size=new Vec2(),tickPriority=0,drawPriority=0) {
             this.pos = pos.clone();
-            this.size = size.clone();
+            if (size instanceof Vec2) {
+                this.size = size.clone();
+                this.radius = Math.min(size.x,size.y);
+            } else {
+                this.size = new Vec2(size);
+                this.radius = size;
+            }
             this.tickPriority = tickPriority;
             this.drawPriority = drawPriority;
             this.id = te._createdObjects;
+            this.circularHitbox = false;
+            this._hitboxColor = 'white';
+            this._destroyed = false;
             te._createdObjects += 1;
         }
         tick(){}
         draw(){}
+        collidesWith(obj) {
+            if (!this.circularHitbox && !obj.circularHitbox) {
+                return tlib.checkAABB(this,obj);
+            } else if (this.circularHitbox && obj.circularHitbox) {
+                return tlib.checkCirclular(this,obj);
+            } else if (!this.circularHitbox && obj.circularHitbox) {
+                return tlib.checkRectCircle(this,obj);
+            } else if (this.circularHitbox && !obj.circularHitbox) {
+                return tlib.checkRectCircle(obj,this);
+            }
+            return false;
+        }
         /** Default function for drawing object hitbox (can be overridden)  
          * Draws at a constant size of 2 pixels on the screen with a difference filter  
          * Use `te.showHitboxes` to enable hitbox rendering on ALL objects */
         drawHitbox() {
             let ctx = te.ctx;
             ctx.save();
-            ctx.strokeStyle = 'white';
-            ctx.globalCompositeOperation = 'difference';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = this._hitboxColor;
+            //ctx.globalCompositeOperation = 'difference';
+            ctx.lineWidth = 1;
             if (!this.drawWithoutTransform) {
                 ctx.lineWidth /= te.zoom;
             }
-            ctx.strokeRect(this.pos.x,this.pos.y,this.size.x,this.size.y);
+            if (this.circularHitbox) {
+                ctx.beginPath();
+                ctx.arc(this.pos.x+this.radius,this.pos.y+this.radius,this.radius,0,2*Math.PI);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(this.pos.x,this.pos.y,this.size.x,this.size.y);
+            }
             ctx.restore();
         }
-        /** Destroys this game object */
+        /** Marks this object to be destroyed next frame */
         destroy() {
-            const index = te.objects.indexOf(this);
-            if (index > -1) {
-                te.objects.splice(index,1);
-            }
+            this._destroyed = true;
+        }
+        toString() {
+            return `GameObject: ${this.constructor.name} (${Math.round(this.pos.x)},${Math.round(this.pos.y)}) id:${this.id}`;
         }
     }
 }
