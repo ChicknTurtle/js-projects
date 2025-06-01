@@ -43,22 +43,93 @@ class MouseTrailParticle extends Particle {
         ctx.restore();
     }
 }
-// define custom ball game object
+// define ball game objects
 class Ball extends te.GameObject {
-    constructor(pos,size) {
-        super(pos,new Vec2(size,size));
+    constructor(pos,radius) {
+        super(pos,radius);
+        this.vel = new tlib.Vec2(0,0);
+        this.lifetime = 30;
+        this.timeLived = 0;
+        this.circularHitbox = true;
+        this.noGrav = false;
+        this.friction = 0.8;
+        this.color = new tlib.Color(0,0,255);
+    }
+    tick() {
+        this.timeLived += te.dt;
+        if (!this.noGrav) {
+            const gravity = 20;
+            this.vel.y += gravity*te.dt;
+        }
+        this.pos.add(this.vel);
+        this.vel.multiply(Math.pow(this.friction,te.dt));
+        this.color.a = Math.min(1,this.lifetime-this.timeLived);
+        if (this.timeLived > this.lifetime) {
+            this.destroy();
+        }
+        // collision
+        te.objects.filter(obj => obj instanceof Ball && obj !== this && this.collidesWith(obj)).forEach(obj => {
+            this.handleCollision(obj);
+        });
+    }
+    handleCollision(obj) { //https://stackoverflow.com/questions/60727534/balls-bouncing-off-of-each-other
+        this.timeLived = 0;
+        obj.timeLived = 0;
+        this.vel = new tlib.Vec2();
+        this.obj = new tlib.Vec2();
+        const thisCenter = this.pos.clone().subtract(this.size.clone().divide(2));
+        const objCenter = obj.pos.clone().subtract(obj.size.clone().divide(2));
+        // delta from this to obj
+        const delta = thisCenter.clone().subtract(objCenter);
+        // magnitude of delta
+        const magnitude = delta.magnitude();
+        this.pos.add(delta.clone().normalize().multiply((this.radius+obj.radius)/2));
+        //obj.pos.subtract(edgeVector.clone().divide(2));
+        //const delta = obj.pos.clone().subtract(this.pos);
+        //const distance = delta.magnitude();
+        //const normal = delta.clone().normalize();
+        //const relativeVelocity = obj.vel.clone().subtract(this.vel);
+        //const dotProduct = relativeVelocity.dot(normal);
+        //const impulseScalar = -(1 + restitution) * dotProduct / (1/thisMass + 1/objMass);
+        //const impulse = normal.clone().multiply(impulseScalar);
+        //this.vel.subtract(impulse.clone().multiply(1/thisMass));
+        //obj.vel.add(impulse.clone().multiply(1/objMass));
     }
     draw() {
         let ctx = te.ctx;
+        // draw side
+        const pos = this.pos.clone().add(new tlib.Vec2(-2.5,5));
         ctx.beginPath();
-        let halfSize = this.size.x/2;
-        ctx.arc(this.pos.x+halfSize,this.pos.y+halfSize,halfSize,0,2*Math.PI);
-        ctx.fillStyle = "#0000ff";
+        ctx.arc(pos.x+this.radius,pos.y+this.radius,this.radius,0,2*Math.PI);
+        ctx.fillStyle = new tlib.Color(0,0,0,this.color.a/2);
+        ctx.fill();
+        // draw main
+        ctx.beginPath();
+        ctx.arc(this.pos.x+this.radius,this.pos.y+this.radius,this.radius,0,2*Math.PI);
+        ctx.fillStyle = this.color;
         ctx.fill();
     }
 }
+class FloatyBall extends Ball {
+    constructor(pos,radius) {
+        super(pos,radius);
+        this.noGrav = true;
+        this.color = new tlib.Color(0,200,0);
+    }
+}
 
-te.keyPressed = function(key, relatedInputs) {
+function spawnBall(floaty) {
+    const size = 25;
+    const center = te.getGamePos(te.mousePos).subtract(new tlib.Vec2(size/2));
+    if (!floaty) {
+        te.spawn(new Ball(center,size));
+    } else {
+        te.spawn(new FloatyBall(center,size));
+    }
+    te.lastSpawned.vel.add(te.vars.avgMouseVel.clone().multiply(1/te.zoom).power(0.5));
+}
+
+te.onKeyPress = function(key, relatedInputs) {
     // toggle hitboxes if any hitboxes keybind pressed
     if (relatedInputs.includes('toggleHitboxes')) {
         te.showHitboxes = !te.showHitboxes;
@@ -67,41 +138,50 @@ te.keyPressed = function(key, relatedInputs) {
     if (relatedInputs.includes('pause')) {
         te.pauseTicking = !te.pauseTicking;
     }
+    // spawn balls
+    if (relatedInputs.includes('spawnBall')) {
+        spawnBall();
+    }
+    if (relatedInputs.includes('spawnFloatyBall')) {
+        spawnBall(true);
+    }
 }
-te.mouseClicked = function(pos) {
+te.onMouseClick = function(pos) {
     te.vars.dragStart = pos.clone();
 }
-te.mouseMoved = function(pos) {
+te.onMouseMove = function(pos) {
     if (te.mouseDown) {
         let delta = pos.clone().subtract(te.vars.dragStart);
         te.vars.cam.subtract(delta);
         te.vars.dragStart = pos.clone();
     }
 }
-te.mouseScrolled = function(pos,delta) {
+te.onScroll = function(pos,delta) {
     zoom(delta.y*-0.01*te.zoom,te.mousePos);
 }
 
 // TODO fix zooming
 function zoom(amount,pos) {
-    const beforeZoom = te.zoom;
+
+    //const beforeZoom = te.zoom;
     let targetZoom = te.zoom + amount;
     targetZoom = Math.min(4, Math.max(0.1, targetZoom));
-    const beforePos = pos;
-    const beforePosScreen = te.getScreenPos(pos);
+    //const beforePos = pos;
+    //const beforePosScreen = te.getScreenPos(pos);
     te.zoom = targetZoom;
-    const posDelta = te.getGamePos(te.mousePos).clone().subtract(beforePos);
-    const zoomDelta = te.zoom - beforeZoom;
-    const correctionX = (beforePosScreen.x / targetZoom - beforePosScreen.x / beforeZoom + beforePos.x * targetZoom) / targetZoom - te.scroll.x;
-    const correctionY = (beforePosScreen.y / targetZoom - beforePosScreen.y / beforeZoom + beforePos.y * targetZoom) / targetZoom - te.scroll.y;
-    te.scroll.x += correctionX;
-    te.scroll.y += correctionY;
-    te.vars.cam.x += correctionX;
-    te.vars.cam.y += correctionY;
+    //const posDelta = te.getGamePos(te.mousePos).clone().subtract(beforePos);
+    //const zoomDelta = te.zoom - beforeZoom;
+    //const correctionX = (beforePosScreen.x / targetZoom - beforePosScreen.x / beforeZoom + beforePos.x * targetZoom) / targetZoom - te.scroll.x;
+    //const correctionY = (beforePosScreen.y / targetZoom - beforePosScreen.y / beforeZoom + beforePos.y * targetZoom) / targetZoom - te.scroll.y;
+    //te.scroll.x += correctionX;
+    //te.scroll.y += correctionY;
+    //te.vars.cam.x += correctionX;
+    //te.vars.cam.y += correctionY;
 
     //te.zoom = tween(te.zoom, te.vars.zoom, Math.min(1, 10 * te.dt));
     //te.scroll.add(scrollCorrection);
     //te.vars.cam.add(scrollCorrection);
+
 }
 
 function start() {
@@ -124,36 +204,51 @@ function start() {
     te.keybinds.KeyH = 'toggleHitboxes';
     te.keybinds.Escape = 'pause';
     te.keybinds.KeyP = 'pause';
+    te.keybinds.Space = 'spawnBall';
+    te.keybinds.KeyK = 'spawnFloatyBall';
 
     // setup custom vars
     te.vars.cam = new Vec2();
     te.vars.zoom = 1;
     te.vars.mouseTrailTimer = 0;
     te.vars.mouseTrailCost = 1/60;
+    te.vars.avgMouseVelArray = [];
+    te.vars.avgMouseVel = new tlib.Vec2();
     
     // start game using canvas with id 'gameCanvas' in the html
     te.start('gameCanvas');
 
     // spawn some game objects
-    te.objects.push(new Ball(new Vec2(0,0),25));
-    te.objects.push(new Ball(new Vec2(50,50),50));
-    te.objects.push(new Ball(new Vec2(500,50),50));
-    te.objects.push(new Ball(new Vec2(5000,50),200));
+    te.spawn(new FloatyBall(new tlib.Vec2(-25,-25),25));
 }
 
 te.update = function(dt) {
+    // update avg mouse velocity
+    const currentTime = performance.now()/1000;
+    te.vars.avgMouseVelArray.push({ vel:te.mouseVel, time:currentTime });
+    te.vars.avgMouseVelArray = te.vars.avgMouseVelArray.filter(
+      (data) => currentTime-data.time <= 0.1
+    );
+    // find average
+    let sum = new tlib.Vec2;
+    for (const item of te.vars.avgMouseVelArray) {
+        sum.add(item.vel);
+    }
+    te.vars.avgMouseVel = sum.divide(te.vars.avgMouseVelArray.length);
+    // debug text
     te.debugText = [];
     te.debugText.push(`dt: ${dt.toFixed(5)}`);
     te.debugText.push(`fps: ${te.fps.toFixed(3)}`);
     te.debugText.push(`keys: ${JSON.stringify(te.keys)}`);
     te.debugText.push(`inputs: ${JSON.stringify(te.inputs)}`);
-    te.debugText.push(`scroll: x${te.scroll.x.toFixed()} y${te.scroll.y.toFixed()}  zoom: ${(te.zoom*100).toFixed(2)}%`);
+    te.debugText.push(`scroll: ${te.scroll.x.toFixed()},${te.scroll.y.toFixed()}  zoom: ${(te.zoom*100).toFixed(2)}%`);
     if (te.mouseHere) {
         const mouseGamePos = te.getGamePos(te.mousePos);
-        te.debugText.push(`mouse: ${(te.mouseDown)?'down':'up'} at x${mouseGamePos.x.toFixed()} y${mouseGamePos.y.toFixed()}`);
+        te.debugText.push(`mouse: ${mouseGamePos.x.toFixed()},${mouseGamePos.y.toFixed()}`);
     } else {
         te.debugText.push(`mouse: ?,?`);
     }
+    te.debugText.push(`mouseVel: ${te.vars.avgMouseVel.x.toFixed()},${te.vars.avgMouseVel.y.toFixed()}`);
     te.debugText.push(`objects: ${te.objects.length}`);
 
     // zooming
@@ -174,7 +269,7 @@ te.update = function(dt) {
     te.scroll.y = tween(te.scroll.y, te.vars.cam.y, Math.min(1,10*te.dt));
 
     // update mouse trail
-    if (te.mouseHere) {
+    if (te.mouseHere && !te.pauseTicking) {
         te.vars.mouseTrailTimer += te.dt;
         for (let i = 0; i < Math.floor(te.vars.mouseTrailTimer/te.vars.mouseTrailCost); i++) {
             te.objects.push(new MouseTrailParticle(te.getGamePos(te.mousePos)));

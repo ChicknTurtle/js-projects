@@ -86,40 +86,47 @@ var te = {
         }
         let alreadyPressed = this.keys[event.code]
         let relatedInputs = this._updateInputKey(event.code, true);
-        // ignore key repeat
-        if (!alreadyPressed) {
-            this.keyPressed(event.code, relatedInputs);
+        // handle key repeat
+        if (alreadyPressed) {
+            this.onKeyRepeat(event.code, relatedInputs);
+        } else {
+            this.onKeyPress(event.code, relatedInputs);
         }
     },
     _handleKeyup: function(event) {
         let relatedInputs = this._updateInputKey(event.code, false);
-        this.keyReleased(event.code, relatedInputs);
+        this.onKeyRelease(event.code, relatedInputs);
     },
     _handleMousemove: function(event) {
         this.mouseHere = true;
         this.mousePos = new Vec2(event.clientX, event.clientY);
-        this.mouseMoved(new Vec2(event.clientX, event.clientY));
+        this.onMouseMove(new Vec2(event.clientX, event.clientY));
     },
     _handleMouseleave: function(event) {
         this.mouseHere = false;
-        //this.mouseDown = false;
     },
     _handleMousedown: function(event) {
         this.mouseDown = true;
-        this.mouseClicked(new Vec2(event.clientX, event.clientY));
+        this.onMouseClick(new Vec2(event.clientX, event.clientY));
     },
     _handleMouseup: function(event) {
         this.mouseDown = false;
-        this.mouseReleased(new Vec2(event.clientX, event.clientY));
+        this.onMouseRelease(new Vec2(event.clientX, event.clientY));
     },
     _handleWheel: function(event) {
         if (this.preventScroll) {
             event.preventDefault();
         }
-        this.mouseScrolled(new Vec2(event.clientX, event.clientY), new Vec2(event.deltaX, event.deltaY));
+        this.onScroll(new Vec2(event.clientX, event.clientY), new Vec2(event.deltaX, event.deltaY));
     },
     _handleBlur: function(event) {
         this._killInputs();
+        this.mouseDown = false;
+    },
+    _handleContextMenu: function(event) {
+        if (this.preventContextMenu) {
+            event.preventDefault();
+        }
     },
     /** Sets up the engine.  
      * Called when user runs `te.start()`.
@@ -149,6 +156,8 @@ var te = {
         window.addEventListener('wheel', this._handleWheel, { passive:false });
         this._handleBlur = this._handleBlur.bind(this);
         window.addEventListener('blur', this._handleBlur);
+        this._handleContextMenu = this._handleContextMenu.bind(this);
+        window.addEventListener('contextmenu', this._handleContextMenu);
     },
     /** Called once every frame (after the game has started).  
      * Handles internal game loop logic.
@@ -160,8 +169,10 @@ var te = {
         this.fps = 1/this.dt;
         this._prevTimestamp = timestamp;
         // update mouseVel
-        this.mouseVel = this._prevMousePos.clone().subtract(this.mousePos);
+        this.mouseVel = this.mousePos.clone().subtract(this._prevMousePos);
         this._prevMousePos = this.mousePos;
+        // destroy game objects
+        te.objects = te.objects.filter(obj => !obj._destroyed);
         // tick game objects
         if (!this.pauseTicking) {
             this.objects.sort((a, b) => a.tickPriority - b.tickPriority);
@@ -189,18 +200,14 @@ var te = {
             ctx.save();
             let centerX = this.canvas.width/2;
             let centerY = this.canvas.height/2;
-            const screenX = -this.scroll.x * this.zoom * this.dpr;
-            const screenY = -this.scroll.y * this.zoom * this.dpr;
-            const drawX = screenX / (this.zoom * this.dpr);
-            const drawY = screenY / (this.zoom * this.dpr);
-            ctx.translate(drawX,drawY);
+            ctx.translate(centerX-this.scroll.x,centerY-this.scroll.y);
             ctx.scale(this.zoom,this.zoom)
             this.objects.sort((a, b) => a.drawPriority - b.drawPriority);
             this.objects.forEach(object => {
                 ctx.save();
                 if (object.drawWithoutTransform === true) {
                     ctx.scale(1/this.zoom,1/this.zoom);
-                    ctx.translate(-drawX,-drawY);
+                    ctx.translate(-centerX+this.scroll.x,-centerY+this.scroll.y);
                 }
                 object.draw();
                 ctx.restore();
@@ -262,8 +269,12 @@ var te = {
     silent: false,
     /** Stores all game objects.  
      * The order may change, you should use ids for identifying objects.
-     * @type {GameObject[]} */
+     * @type {te.GameObject[]} */
     objects: [],
+    /** Stores the last game object spawned using `te.spawn()`,  
+     * or `null` if `te.spawn()` was never used.
+     * @type {te.GameObject|null} */
+    lastSpawned: null,
     /** The main canvas, used to display the game.
      * @type {HTMLCanvasElement} */
     canvas: null,
@@ -321,12 +332,15 @@ var te = {
     /** Keeps track of the mouse's current velocity.
      * @type {Vec2} */
     mouseVel: new Vec2(),
-    /** Keeps track of whether mouse is over the window.
+    /** Whether or not the mouse is over the window.
      * @type {boolean} */
     mouseHere: false,
-    /** Keeps track of whether mouse is dragging.
+    /** Whether or not the mouse is being pressed.
      * @type {boolean} */
     mouseDown: false,
+    /** Whether or not the conext menu shown on right click should be prevented.
+     * @type {boolean} */
+    preventContextMenu: true,
     /** Whether debug hitboxes are displayed.
      * @type {boolean} */
     showHitboxes: false,
@@ -343,7 +357,7 @@ var te = {
      * Should be called only once, when your game starts.
      * @param {string} canvasId The id of the canvas as defined in the html, needed to fetch and use the canvas object */
     start: function(canvasId='canvas') {
-        this._log("🐢 TurtleEngine initializing...");
+        this._log("\u{1F422} TurtleEngine initializing...");
         this._setup(canvasId);
         requestAnimationFrame(this._update.bind(this));
     },
@@ -351,42 +365,60 @@ var te = {
      * Automatically called once every frame (after the game has started via `te.start()`).
      * @param {number} dt Time since the last frame in seconds */
     update: function(dt){},
+    /** Can be used to spawn a game object.  
+     * The object will be stored in `te.lastSpawned`.
+     * @param {te.GameObject} object The GameObject to spawn */
+    spawn: function(object){
+        if (!object instanceof this.GameObject) {
+            this._logWarn(`Tried to spawn a non-GameObject (${object})!`);
+            return
+        }
+        this.lastSpawned = object;
+        te.objects.push(object);
+    },
     /** Overwrite this function and use it as a keydown event.  
-     * Automatically called when a key is pressed, but ignores key repeat.
+     * Automatically called when a key is pressed, but ignores key repeat.  
+     * Use `te.onKeyRepeat()` to listen to key repeating.
      * @param {string} key Code of the key that was pressed
      * @param {string[]} relatedInputs List of related inputs, if any */
-    keyPressed: function(key, relatedInputs){},
+    onKeyPress: function(key, relatedInputs){},
+    /** Overwrite this function and use it as a keydown event.  
+     * Automatically called when a key signal is repeated due to holding down the key.  
+     * Use `te.onKeyPress()` to listen to the original key press.
+     * @param {string} key Code of the key that was pressed
+     * @param {string[]} relatedInputs List of related inputs, if any */
+    onKeyRepeat: function(key, relatedInputs){},
     /** Overwrite this function and use it as a keyup event.  
      * Automatically called when a key is released.
      * @param {string} key Code of the key that was released
      * @param {string[]} relatedInputs List of related inputs, if any */
-    keyReleased: function(key, relatedInputs){},
-    /** Overwrite this function and use it as a mousemove event.  
-     * Automatically called when the mouse is moved.
-     * @param {Vec2} pos Current mouse location on screen */
-    mouseMoved: function(pos){},
+    onKeyRelease: function(key, relatedInputs){},
     /** Overwrite this function and use it as a mousedown event.  
      * Automatically called when the mouse is clicked.
-     * @param {Vec2} pos Current mouse location on screen */
-    mouseClicked: function(pos){},
+     * @param {Vec2} pos Click position in screen pos */
+    onMouseClick: function(mousePos){},
     /** Overwrite this function and use it as a mouseup event.  
      * Automatically called when the mouse is released.
-     * @param {Vec2} pos Current mouse location on screen */
-    mouseReleased: function(pos){},
+     * @param {Vec2} pos Mouse position in screen pos */
+    onMouseRelease: function(mousePos){},
     /** Overwrite this function and use it as a wheel event.  
      * Automatically called when the screen is scrolled.
      * @param {Vec2} pos Current mouse location on screen
      * @param {Vec2} delta Delta of scroll amount, you'll usually want delta.y */
-    mouseScrolled: function(pos,delta){},
+    onScroll: function(pos,delta){},
     /** Get the screen pos from a game pos
      * @param {Vec2} pos Input pos */
     getScreenPos: function(pos) {
-        return pos.clone().multiply(this.zoom).add(new Vec2(-this.scroll.x,-this.scroll.y));
+        let centerX = this.canvas.width/2;
+        let centerY = this.canvas.height/2;
+        return pos.clone().multiply(this.zoom).add(new Vec2(centerX-this.scroll.x,centerY-this.scroll.y));
     },
     /** Get the game pos from a screen pos
      * @param {Vec2} pos Input pos */
     getGamePos: function(pos) {
-        return pos.clone().subtract(new Vec2(-this.scroll.x,-this.scroll.y)).divide(this.zoom);
+        let centerX = this.canvas.width/2;
+        let centerY = this.canvas.height/2;
+        return pos.clone().subtract(new Vec2(centerX-this.scroll.x,centerY-this.scroll.y)).divide(this.zoom);
     },
 
     /** The base game object class.  
